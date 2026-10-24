@@ -19,6 +19,14 @@ java -XX:+UseParallelGC -jar /tmp/tla2tools.jar spec/TodoTask.tla
 TLC_JAR=tla2tools.jar python mutants.py
 ```
 
+## Injection guard
+
+`inject.py` walks three plans and scores one edit per cell with the same TLC judge: the chart fault grid, the conjuncts in `spec/TodoTask.cfg`, and the lineage of `TitleNotEmpty`. A trace is checked against the faithful `Next`. Ten cells are the same fault as a `mutants.py` mutant and are not new claims.
+
+```bash
+TLC_JAR=tla2tools.jar python inject.py
+```
+
 ## Execution events
 
 `python -m execution_events` prints JSON Lines for one walk of the b-full task flow (`todo_app.task`, the same edges as `spec/TodoTask.tla`). Each line has `kind`, `qualname`, `thread_id`, `thread_name`, `file`, and `line`. `value`, `exception`, `arg0`, `task`, and `callable` are included when that event has them.
