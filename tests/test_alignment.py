@@ -64,6 +64,7 @@ def _run_tlc(module: str, config: str) -> TLCResult:
     jar = os.environ.get("TLC_JAR")
     if not jar:
         raise AssertionError("TLC_JAR is not set")
+    jar = os.path.abspath(jar)
     with tempfile.TemporaryDirectory() as tmp:
         shutil.copy(os.path.join(ROOT, "spec", "TodoTask.tla"), os.path.join(tmp, "TodoTask.tla"))
         with open(os.path.join(tmp, "MappedTrace.tla"), "w", encoding="utf-8") as handle:
