@@ -13,21 +13,11 @@ java -XX:+UseParallelGC -jar /tmp/tla2tools.jar spec/TodoTask.tla
 
 ## Execution events
 
-Python 3.12 and newer can record calls, returns, raised exceptions, exits, and coroutine switches with `sys.monitoring`. Each event includes the thread that produced it.
+`python -m execution_events` prints JSON Lines for one walk of the b-full task flow (`todo_app.task`, the same edges as `spec/TodoTask.tla`). Each line has `kind`, `qualname`, `thread_id`, `thread_name`, `file`, and `line`. `value`, `exception`, `arg0`, `task`, and `callable` are included when that event has them.
 
 ```bash
 python -m execution_events
 ```
-
-```python
-import execution_events
-from execution_events import sample
-
-with execution_events.capture(files=[sample.__file__]) as events:
-    sample.run()
-```
-
-Pass `files` to keep events from those source files. Omit it to record the rest of the process.
 
 ## Alignment
 

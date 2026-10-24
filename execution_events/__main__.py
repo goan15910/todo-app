@@ -1,17 +1,19 @@
-"""Print events captured from :mod:`execution_events.sample`."""
+"""Print a JSON Lines log of one b-full todo-task walk."""
 
 from __future__ import annotations
 
-import execution_events.sample as sample
+import json
+
+import todo_app.task as tasks
 from execution_events import capture
-from execution_events.sample import run
+from execution_events.todo_flow import run_todo_flow
 
 
 def main() -> None:
-    with capture(files=[sample.__file__]) as events:
-        run()
+    with capture(files=[tasks.__file__]) as events:
+        run_todo_flow()
     for event in events:
-        print(event)
+        print(json.dumps(event.as_record(), ensure_ascii=False))
 
 
 if __name__ == "__main__":

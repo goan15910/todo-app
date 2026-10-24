@@ -15,7 +15,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -41,7 +41,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
@@ -55,3 +55,18 @@ jobs:
         env:
           TLC_JAR: tla2tools.jar
         run: python -m unittest discover -s tests
+
+  recorder:
+    name: Recorder
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Recorder tests
+        run: python -m unittest discover -s tests -p 'test_execution_events.py'
