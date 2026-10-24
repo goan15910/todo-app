@@ -1,7 +1,9 @@
 """Alignment of one ``TodoTask`` onto ``spec/TodoTask.tla``.
 
-Edit ``_METHODS``, ``ACTIONS``, ``project_task``, and ``advance_task`` to
-change the correspondence. ``set_title`` is not a step: the spec chooses
+Edit ``_METHODS``, ``ACTIONS``, ``project_task``, ``advance_task``, and
+``effect_task`` to change the correspondence. ``effect_task`` is how a
+JSON Lines log is replayed: the log has no spec fields. ``set_title`` is
+not a step: the spec chooses
 the draft title in ``Init``. A non-empty title is the spec value ``"task"``.
 Timestamps are ``"unset"`` or ``"set"``. ``submitted`` is not a field of
 the task; ``advance_task`` remembers it.
@@ -11,7 +13,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from event_alignment import Alignment
+from collections.abc import Mapping
+
+from event_alignment import Alignment, AlignmentError
 from todo_app.task import TodoTask
 
 _METHODS = {
@@ -69,6 +73,55 @@ def project_task(task: TodoTask, history: object) -> dict[str, object]:
     }
 
 
+def effect_task(fields: Mapping[str, object], action: str) -> dict[str, object]:
+    """Successor record for ``action``. Matches the assignments in the spec."""
+
+    updated = dict(fields)
+    if action == "DraftSubmit":
+        updated["state"] = "todo"
+        updated["listed"] = True
+        updated["submitted"] = True
+    elif action == "DraftDelete":
+        updated["state"] = "deleted"
+        updated["deleted_at"] = "set"
+    elif action == "TodoStart":
+        updated["state"] = "inProgress"
+        updated["started_at"] = "set"
+    elif action == "TodoComplete":
+        updated["state"] = "done"
+        updated["completed_at"] = "set"
+    elif action == "TodoSnooze":
+        updated["state"] = "snoozed"
+        updated["wake_at"] = "set"
+    elif action == "TodoDelete":
+        updated["state"] = "deleted"
+        updated["deleted_at"] = "set"
+    elif action == "InProgressSnooze":
+        updated["state"] = "snoozed"
+        updated["wake_at"] = "set"
+    elif action == "InProgressComplete":
+        updated["state"] = "done"
+        updated["completed_at"] = "set"
+    elif action == "SnoozedResume":
+        updated["state"] = "inProgress"
+        updated["wake_at"] = "unset"
+    elif action == "DoneReopen":
+        updated["state"] = "todo"
+        updated["completed_at"] = "unset"
+    elif action == "DoneArchive":
+        updated["state"] = "archived"
+        updated["listed"] = False
+    elif action == "ArchivedUnarchive":
+        updated["state"] = "done"
+        updated["listed"] = True
+    elif action == "DeletedRestore":
+        updated["state"] = "todo"
+        updated["deleted_at"] = "unset"
+    else:
+        raise AlignmentError(f"no effect for {action}")
+    return updated
+
+
 def advance_task(history: object, action: str) -> TaskHistory:
     if not isinstance(history, TaskHistory):
         raise TypeError("history must be TaskHistory")
@@ -84,4 +137,5 @@ todo_alignment = Alignment(
     project=project_task,
     advance=advance_task,
     initial_history=TaskHistory(),
+    effect=effect_task,
 )

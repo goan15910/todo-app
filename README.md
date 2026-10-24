@@ -36,3 +36,11 @@ with trace(todo_alignment, files=[tasks.__file__]) as run:
 
 mapped = run.mapped()
 ```
+
+A JSON Lines log from the recorder uses the same declaration. Each line has `kind`, `qualname`, `thread_id`, `thread_name`, `file`, and `line`, plus `value`, `exception`, `arg0`, and `task` when the event has them. The log does not carry `task`. Pass the spec record from before the first step; `effect` names each successor.
+
+```python
+from event_alignment import map_log, read_jsonl
+
+mapped = map_log(read_jsonl(open("trace.jsonl")), todo_alignment, initial)
+```
