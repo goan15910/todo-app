@@ -28,3 +28,21 @@ with execution_events.capture(files=[sample.__file__]) as events:
 ```
 
 Pass `files` to keep events from those source files. Omit it to record the rest of the process.
+
+## Alignment
+
+Those events are calls and returns, not values of `task`. `event_alignment` is the declaration of which returns are spec steps. `todo_app.alignment` maps this task onto `spec/TodoTask.tla`: the action for each step, and the `task` record read from the live object. `submitted` is remembered there; the events do not carry it.
+
+```python
+import todo_app.task as tasks
+from event_alignment import trace
+from todo_app.alignment import todo_alignment
+
+with trace(todo_alignment, files=[tasks.__file__]) as run:
+    item = tasks.TodoTask("")
+    run.bind(item)
+    item.set_title("buy milk")
+    item.submit()
+
+mapped = run.mapped()
+```
