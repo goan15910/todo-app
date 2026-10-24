@@ -11,6 +11,14 @@ curl -fsSL -o /tmp/tla2tools.jar https://github.com/tlaplus/tlaplus/releases/dow
 java -XX:+UseParallelGC -jar /tmp/tla2tools.jar spec/TodoTask.tla
 ```
 
+## Mutation
+
+`mutants.py` is one fault per mutant. TLC judges a spec edit with `spec/TodoTask.cfg`. A Python edit is projected onto spec states and checked against the faithful `Next`.
+
+```bash
+TLC_JAR=tla2tools.jar python mutants.py
+```
+
 ## Execution events
 
 `python -m execution_events` prints JSON Lines for one walk of the b-full task flow (`todo_app.task`, the same edges as `spec/TodoTask.tla`). Each line has `kind`, `qualname`, `thread_id`, `thread_name`, `file`, and `line`. `value`, `exception`, `arg0`, `task`, and `callable` are included when that event has them.
