@@ -151,7 +151,7 @@ class TodoTask:
         elif effect == "clearWakeAt":
             self.wake_at = None
         elif effect == "stampDeleted":
-            self.deleted_at = now
+            self.deleted_at = datetime.now(timezone.utc)
         elif effect == "clearDeleted":
             self.deleted_at = None
         else:
