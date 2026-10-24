@@ -101,6 +101,45 @@ class ExecutionEvent:
         parts.append(f"{os.path.basename(self.filename)}:{self.lineno}")
         return " ".join(parts)
 
+    def as_record(self) -> dict[str, object]:
+        """JSON object for one log line.
+
+        ``kind``, ``qualname``, ``thread_id``, ``thread_name``, ``file``, and
+        ``line`` are always present. Payload keys are present only when this
+        event carries them.
+        """
+
+        record: dict[str, object] = {
+            "kind": self.kind,
+            "qualname": self.qualname,
+            "thread_id": self.thread_id,
+            "thread_name": self.thread_name,
+            "file": _display_file(self.filename),
+            "line": self.lineno,
+        }
+        if self.value is not None:
+            record["value"] = self.value
+        if self.exception is not None:
+            record["exception"] = self.exception
+        if self.arg0 is not None:
+            record["arg0"] = self.arg0
+        if self.task is not None:
+            record["task"] = self.task
+        if self.callable is not None:
+            record["callable"] = self.callable
+        return record
+
+
+def _display_file(filename: str) -> str:
+    try:
+        relative = os.path.relpath(filename, os.getcwd())
+    except ValueError:
+        relative = filename
+    relative = relative.replace("\\", "/")
+    if relative.startswith("../"):
+        return filename.replace("\\", "/")
+    return relative
+
 
 def _require_monitoring() -> None:
     if sys.version_info < (3, 12) or not hasattr(sys, "monitoring"):

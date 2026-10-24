@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
 import sys
 import unittest
 
 import execution_events.sample as sample
+import todo_app.task as tasks
 from execution_events import capture
+from execution_events.todo_flow import run_todo_flow
+
+_RECORD_KEYS = ("kind", "qualname", "thread_id", "thread_name", "file", "line")
 
 
 def _matching(events, kind, qualname):
@@ -134,6 +140,63 @@ class CaptureTests(unittest.TestCase):
         self.assertTrue(any(event.value == "5" for event in _matching(inner, "PY_RETURN", "add")))
         names = [sys.monitoring.get_tool(tool_id) for tool_id in range(6)]
         self.assertNotIn("execution_events", names)
+
+
+class TodoFlowLogTests(unittest.TestCase):
+    def test_walk_records_edges_and_the_rejected_submit(self) -> None:
+        with capture(files=[tasks.__file__]) as events:
+            run_todo_flow()
+
+        records = [event.as_record() for event in events]
+        self.assertTrue(records)
+        for record in records:
+            self.assertEqual(tuple(record)[:6], _RECORD_KEYS)
+            self.assertNotIn(None, record.values())
+            self.assertTrue(str(record["file"]).endswith("todo_app/task.py"))
+            self.assertIsInstance(record["thread_id"], int)
+            self.assertIsInstance(record["line"], int)
+
+        returns = [record for record in records if record["kind"] == "PY_RETURN"]
+        qualnames = {record["qualname"] for record in returns}
+        for method in (
+            "TodoTask.submit",
+            "TodoTask.delete",
+            "TodoTask.start",
+            "TodoTask.complete",
+            "TodoTask.snooze",
+            "TodoTask.resume",
+            "TodoTask.reopen",
+            "TodoTask.archive",
+            "TodoTask.unarchive",
+            "TodoTask.restore",
+        ):
+            self.assertIn(method, qualnames)
+
+        rejected = [
+            record
+            for record in records
+            if record["kind"] == "RAISE" and "titleNotEmpty" in str(record.get("exception", ""))
+        ]
+        self.assertTrue(rejected)
+        self.assertNotIn("value", rejected[0])
+
+    def test_cli_prints_json_lines(self) -> None:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.run(
+            [sys.executable, "-m", "execution_events"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        lines = [line for line in proc.stdout.splitlines() if line]
+        self.assertTrue(lines)
+        parsed = [json.loads(line) for line in lines]
+        self.assertTrue(
+            any(row["qualname"] == "TodoTask.submit" and row["kind"] == "PY_RETURN" for row in parsed)
+        )
+        self.assertTrue(any(row["kind"] == "PY_UNWIND" for row in parsed))
+        self.assertEqual(proc.stderr, "")
 
 
 if __name__ == "__main__":
