@@ -9,8 +9,13 @@ behaviors the eight workflows do not name.
 
 from __future__ import annotations
 
+import os
+import re
+import subprocess
 import sys
+import tempfile
 import unittest
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,8 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import todo_app.task as tasks
 from event_alignment import MappedTrace, trace, trace_config, trace_module
-from test_alignment import INVARIANTS, _assert_actions_covered, _run_tlc
-from todo_app.alignment import ACTIONS, todo_alignment
+from test_alignment import INVARIANTS, ROOT, _assert_actions_covered, _require_tlc, _run_tlc
+from todo_app.alignment import ACTIONS, TaskHistory, project_task, todo_alignment
 from todo_app.task import EDGES, Edge, TodoTask, TransitionRejected
 
 WAKE = datetime(2026, 10, 25, tzinfo=timezone.utc)
@@ -136,6 +141,7 @@ _REACH = {
 }
 
 _FIELDS = ("state", "title", "listed", "started_at", "completed_at", "wake_at", "deleted_at")
+_RECORD = _FIELDS + ("submitted",)
 
 _EFFECT_FIELD = {
     "markListed": "listed",
@@ -217,6 +223,75 @@ def _assert_effect(case: unittest.TestCase, task: TodoTask, before: tuple[object
         case.assertIsInstance(getattr(task, field), datetime)
     else:
         raise AssertionError(edge.effect)
+
+
+def _record(task: TodoTask, submitted: bool) -> tuple[object, ...]:
+    fields = project_task(task, TaskHistory(submitted=submitted))
+    return tuple(fields[name] for name in _RECORD)
+
+
+def _replay(title: str, path: tuple[str, ...]) -> tuple[TodoTask, bool]:
+    task = TodoTask(title)
+    submitted = False
+    for event in path:
+        _apply(task, event)
+        if event == "SUBMIT":
+            submitted = True
+    return task, submitted
+
+
+def _parse_tlc_graph(dot: str) -> tuple[set[tuple[object, ...]], set[tuple[object, ...]]]:
+    """States and ``(pre, action, post)`` edges from ``tlc -dump dot``."""
+
+    nodes: dict[str, tuple[object, ...]] = {}
+    for match in re.finditer(r'(-?\d+) \[label="task = \[(.*?)]"', dot):
+        fields: dict[str, object] = {}
+        for name, raw in re.findall(r'(\w+) \|-> (\\?"[^"]*\\?"|TRUE|FALSE)', match.group(2)):
+            if raw == "TRUE":
+                fields[name] = True
+            elif raw == "FALSE":
+                fields[name] = False
+            else:
+                fields[name] = raw.replace('\\"', "").replace('"', "")
+        nodes[match.group(1)] = tuple(fields[name] for name in _RECORD)
+    edges: set[tuple[object, ...]] = set()
+    for match in re.finditer(r'(-?\d+) -> (-?\d+) \[label="(\w+)"', dot):
+        edges.add((nodes[match.group(1)], match.group(3), nodes[match.group(2)]))
+    return set(nodes.values()), edges
+
+
+def _dump_next() -> tuple[set[tuple[object, ...]], set[tuple[object, ...]], str]:
+    jar = _require_tlc()
+    spec = os.path.join(ROOT, "spec", "TodoTask.tla")
+    with tempfile.TemporaryDirectory() as tmp:
+        dot = os.path.join(tmp, "states.dot")
+        meta = os.path.join(tmp, "meta")
+        proc = subprocess.run(
+            [
+                "java",
+                "-XX:+UseParallelGC",
+                "-jar",
+                jar,
+                "-workers",
+                "1",
+                "-metadir",
+                meta,
+                "-dump",
+                "dot,actionlabels",
+                dot,
+                spec,
+            ],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        output = proc.stdout + proc.stderr
+        if proc.returncode != 0:
+            raise AssertionError(output[-2000:])
+        graph = Path(dot).read_text(encoding="utf-8")
+    return (*_parse_tlc_graph(graph), output)
 
 
 def _check_tlc(case: unittest.TestCase, mapped: MappedTrace) -> None:
@@ -306,6 +381,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(set(_REACH), reached)
         self.assertEqual(set(_EVENTS), {edge.event for edge in EDGES})
         absent = [(state, event) for state in _REACH for event in _EVENTS if (state, event) not in legal]
+        self.assertEqual(len(_REACH) * len(_EVENTS), 70)
         self.assertEqual(len(absent), 57)
         for state, prep in _REACH.items():
             forbidden = [event for event in _EVENTS if (state, event) not in legal]
@@ -395,6 +471,68 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(
             any(event.kind == "PY_UNWIND" and event.qualname == "TodoTask.set_title" for event in run.events)
         )
+
+    def test_reachable_states_match_next(self) -> None:
+        """Breadth-first walk of every reachable spec record, all 10 events."""
+
+        example_records: set[tuple[object, ...]] = set()
+        for _name, title, events, _states, _actions in SPECIFIED:
+            task = TodoTask(title)
+            submitted = False
+            example_records.add(_record(task, submitted))
+            for event in events:
+                _apply(task, event)
+                if event == "SUBMIT":
+                    submitted = True
+                example_records.add(_record(task, submitted))
+        self.assertEqual(len(SPECIFIED), 11)
+        self.assertEqual(len(example_records), 14)
+
+        tlc_states, tlc_edges, output = _dump_next()
+        self.assertIn("58 distinct states found", output)
+        self.assertEqual(len(tlc_states), 58)
+        self.assertEqual(len(tlc_edges), 109)
+
+        reached: dict[tuple[object, ...], tuple[str, tuple[str, ...]]] = {}
+        queue: deque[tuple[object, ...]] = deque()
+        for title in ("", "task"):
+            record = _record(TodoTask(title), False)
+            reached[record] = (title, ())
+            queue.append(record)
+
+        accepts: set[tuple[object, ...]] = set()
+        refusals = 0
+        while queue:
+            record = queue.popleft()
+            title, path = reached[record]
+            outgoing: dict[str, tuple[object, ...]] = {}
+            for event in _EVENTS:
+                task, submitted = _replay(title, path)
+                self.assertEqual(_record(task, submitted), record)
+                before = _view(task)
+                try:
+                    _apply(task, event)
+                except TransitionRejected:
+                    self.assertEqual(_view(task), before)
+                    refusals += 1
+                    continue
+                post = _record(task, True if event == "SUBMIT" else submitted)
+                action = ACTIONS[(record[0], event)]
+                self.assertNotIn(action, outgoing)
+                outgoing[action] = post
+                accepts.add((record, action, post))
+                if post not in reached:
+                    reached[post] = (title, path + (event,))
+                    queue.append(post)
+            tlc_out = {action: post for pre, action, post in tlc_edges if pre == record}
+            self.assertEqual(outgoing, tlc_out)
+
+        self.assertEqual(set(reached), tlc_states)
+        self.assertEqual(accepts, tlc_edges)
+        self.assertEqual(len(reached), 58)
+        self.assertEqual(refusals + len(accepts), len(reached) * len(_EVENTS))
+        self.assertEqual(refusals, 471)
+        self.assertEqual(len(accepts), 109)
 
 
 if __name__ == "__main__":

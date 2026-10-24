@@ -60,11 +60,17 @@ class TLCResult:
         self.output = output
 
 
-def _run_tlc(module: str, config: str) -> TLCResult:
+def _require_tlc() -> str:
+    """Absolute path of ``TLC_JAR``, or a skip when it is unset."""
+
     jar = os.environ.get("TLC_JAR")
     if not jar:
-        raise AssertionError("TLC_JAR is not set")
-    jar = os.path.abspath(jar)
+        raise unittest.SkipTest("TLC_JAR is not set")
+    return os.path.abspath(jar)
+
+
+def _run_tlc(module: str, config: str) -> TLCResult:
+    jar = _require_tlc()
     with tempfile.TemporaryDirectory() as tmp:
         shutil.copy(os.path.join(ROOT, "spec", "TodoTask.tla"), os.path.join(tmp, "TodoTask.tla"))
         with open(os.path.join(tmp, "MappedTrace.tla"), "w", encoding="utf-8") as handle:
