@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+states/
+tlc-meta/
+tla2tools.jar
