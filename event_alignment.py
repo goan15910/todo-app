@@ -15,6 +15,7 @@ thread-switch action.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 import threading
@@ -101,6 +102,7 @@ class Alignment:
     advance: Callable[[object, str], object]
     initial_history: object
     state_field: str = "state"
+    effect: Callable[[Mapping[str, object], str], Mapping[str, object]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,6 +377,130 @@ def trace(
         watch.stop()
 
 
+# One JSON object from `python -m execution_events`. Payload keys are
+# omitted when the event has none. `callable` is the callee name.
+_LOG_REQUIRED = ("kind", "qualname", "thread_id", "thread_name", "file", "line")
+_LOG_OPTIONAL = ("value", "exception", "arg0", "task", "callable")
+_LOG_KEYS = frozenset(_LOG_REQUIRED + _LOG_OPTIONAL)
+
+
+@dataclass(frozen=True, slots=True)
+class LogEvent:
+    """One JSON object from the recorder command."""
+
+    kind: str
+    qualname: str
+    thread_id: int
+    thread_name: str
+    file: str
+    line: int
+    value: str | None = None
+    exception: str | None = None
+    arg0: str | None = None
+    task: str | None = None
+    callable: str | None = None
+
+
+def read_jsonl(lines: Iterable[str]) -> tuple[LogEvent, ...]:
+    """Parse JSON Lines from ``python -m execution_events``. Blank lines are ignored."""
+
+    parsed: list[LogEvent] = []
+    for lineno, raw in enumerate(lines, start=1):
+        if not raw.strip():
+            continue
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise AlignmentError(f"line {lineno} is not a JSON object") from exc
+        if not isinstance(payload, dict):
+            raise AlignmentError(f"line {lineno} is not a JSON object")
+        extra = set(payload) - _LOG_KEYS
+        if extra:
+            raise AlignmentError(f"line {lineno} has unexpected keys: {sorted(extra)}")
+        missing = [key for key in _LOG_REQUIRED if key not in payload]
+        if missing:
+            raise AlignmentError(f"line {lineno} is missing {missing}")
+        parsed.append(
+            LogEvent(
+                kind=_text(payload, "kind", lineno),
+                qualname=_text(payload, "qualname", lineno),
+                thread_id=_whole(payload, "thread_id", lineno),
+                thread_name=_text(payload, "thread_name", lineno),
+                file=_text(payload, "file", lineno),
+                line=_whole(payload, "line", lineno),
+                value=_optional_text(payload, "value", lineno),
+                exception=_optional_text(payload, "exception", lineno),
+                arg0=_optional_text(payload, "arg0", lineno),
+                task=_optional_text(payload, "task", lineno),
+                callable=_optional_text(payload, "callable", lineno),
+            )
+        )
+    return tuple(parsed)
+
+
+def map_log(
+    events: Iterable[LogEvent], alignment: Alignment, initial: SpecState
+) -> MappedTrace:
+    """Replay one task's JSON Lines through ``alignment``.
+
+    A successful return of a declared step is one spec action. ``initial``
+    is the record before the first step, and ``alignment.effect`` is each
+    successor. An unwind is not a step. This does not read ``arg0``.
+    """
+
+    if alignment.effect is None:
+        raise AlignmentError("the alignment has no effect for log replay")
+    state = initial
+    steps: list[SpecStep] = []
+    for event in events:
+        if event.kind != "PY_RETURN" or event.qualname not in alignment.steps:
+            continue
+        chart = alignment.steps[event.qualname]
+        try:
+            action = alignment.actions[(state[alignment.state_field], chart)]
+        except KeyError as exc:
+            raise AlignmentError(
+                f"no spec action for {state[alignment.state_field]} {chart}"
+            ) from exc
+        post = SpecState(alignment.effect(state.fields, action))
+        if post == state:
+            raise AlignmentError(f"{action} did not change the spec state")
+        steps.append(
+            SpecStep(
+                action=action,
+                pre=state,
+                post=post,
+                thread_id=event.thread_id,
+                qualname=event.qualname,
+            )
+        )
+        state = post
+    return MappedTrace(alignment.variable, initial, tuple(steps))
+
+
+def _text(payload: dict[str, object], key: str, lineno: int) -> str:
+    value = payload[key]
+    if not isinstance(value, str):
+        raise AlignmentError(f"line {lineno} field {key} must be a string")
+    return value
+
+
+def _whole(payload: dict[str, object], key: str, lineno: int) -> int:
+    value = payload[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise AlignmentError(f"line {lineno} field {key} must be an integer")
+    return value
+
+
+def _optional_text(payload: dict[str, object], key: str, lineno: int) -> str | None:
+    if key not in payload or payload[key] is None:
+        return None
+    value = payload[key]
+    if not isinstance(value, str):
+        raise AlignmentError(f"line {lineno} field {key} must be a string")
+    return value
+
+
 def _tla_value(value: object) -> str:
     if isinstance(value, bool):
         return "TRUE" if value else "FALSE"
@@ -442,10 +568,13 @@ def trace_config(invariants: Iterable[str] = ()) -> str:
 __all__ = [
     "Alignment",
     "AlignmentError",
+    "LogEvent",
     "MappedTrace",
     "SpecState",
     "SpecStep",
     "TraceRun",
+    "map_log",
+    "read_jsonl",
     "trace",
     "trace_config",
     "trace_module",
