@@ -37,10 +37,11 @@ with trace(todo_alignment, files=[tasks.__file__]) as run:
 mapped = run.mapped()
 ```
 
-A JSON Lines log from the recorder uses the same declaration. Each line has `kind`, `qualname`, `thread_id`, `thread_name`, `file`, and `line`, plus `value`, `exception`, `arg0`, and `task` when the event has them. The log does not carry `task`. Pass the spec record from before the first step; `effect` names each successor.
+`python -m execution_events` prints one task after another. `task_traces` reads that log: a new `TodoTask` starts a draft, a successful return of a chart method is one spec step, and an unwind is not. The call's `arg0` repr supplies `state`, `title`, and `listed` before the step. Any non-empty title is the spec value `"task"`. Timestamps and `submitted` are not in the log; `effect` names those successors. `callable` is the callee, not a spec field.
 
 ```python
-from event_alignment import map_log, read_jsonl
+from event_alignment import read_jsonl
+from todo_app.alignment import task_traces
 
-mapped = map_log(read_jsonl(open("trace.jsonl")), todo_alignment, initial)
+traces = task_traces(read_jsonl(open("trace.jsonl")))
 ```

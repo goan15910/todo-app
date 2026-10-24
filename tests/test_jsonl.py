@@ -1,98 +1,102 @@
-"""A JSON Lines log of the b-full flow checks as a spec trace."""
+"""The recorder command's JSON Lines log checks as spec traces."""
 
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import todo_app.task as tasks
-from event_alignment import map_log, read_jsonl, record_from_event, trace, trace_config, trace_module
-from event_alignment import AlignmentError, SpecState
-from test_alignment import INVARIANTS, _assert_actions_covered, _fields, _run_tlc, _with_title
-from todo_app.alignment import todo_alignment
-from todo_app.task import TodoTask, TransitionRejected
+from event_alignment import AlignmentError, read_jsonl, trace_config, trace_module
+from test_alignment import INVARIANTS, ROOT, _assert_actions_covered, _fields, _run_tlc, _with_title
+from todo_app.alignment import ACTIONS, task_traces
 
-_KEYS = {"kind", "qualname", "thread_id", "thread_name", "file", "line"}
-_OPTIONAL = {"value", "exception", "arg0", "task"}
-
-
-def _b_full(item: TodoTask) -> None:
-    when = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    try:
-        item.submit()
-    except TransitionRejected:
-        pass
-    else:
-        raise AssertionError("empty submit should be rejected")
-    item.set_title("buy milk")
-    item.submit()
-    item.start()
-    item.snooze(when)
-    item.resume()
-    item.complete()
-    item.archive()
-    item.unarchive()
-    item.reopen()
-    item.delete()
-    item.restore()
+# One behavior per TodoTask constructed by `python -m execution_events`.
+_WALKS = (
+    (
+        "DraftSubmit",
+        "TodoStart",
+        "InProgressSnooze",
+        "SnoozedResume",
+        "InProgressComplete",
+        "DoneReopen",
+        "TodoComplete",
+        "DoneArchive",
+        "ArchivedUnarchive",
+    ),
+    ("DraftSubmit", "TodoComplete"),
+    ("DraftSubmit", "TodoSnooze"),
+    ("DraftSubmit", "TodoDelete", "DeletedRestore"),
+    ("DraftDelete",),
+    ("DraftSubmit", "TodoStart", "InProgressComplete"),
+    (),
+)
 
 
 class JsonlTraceTests(unittest.TestCase):
-    def test_b_full_log_checks_against_the_spec(self) -> None:
-        with trace(todo_alignment, files=[tasks.__file__]) as run:
-            item = TodoTask("")
-            run.bind(item)
-            _b_full(item)
-        lines = [json.dumps(record_from_event(event)) for event in run.events]
-        self.assertGreater(len(lines), 10)
-        for line in lines:
-            payload = json.loads(line)
-            self.assertTrue(_KEYS <= set(payload) <= _KEYS | _OPTIONAL)
-        logged = read_jsonl(lines)
-        initial = SpecState(_with_title("task"))
-        mapped = map_log(logged, todo_alignment, initial)
-        live = run.mapped()
+    def test_landed_command_log_checks_against_the_spec(self) -> None:
+        proc = subprocess.run(
+            [sys.executable, "-m", "execution_events"],
+            cwd=ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stderr, "")
+        logged = read_jsonl(proc.stdout.splitlines())
+        self.assertGreater(len(logged), 10)
+        for event in logged:
+            self.assertTrue(event.file.endswith("todo_app/task.py"))
 
+        traces = task_traces(logged)
+        self.assertEqual(tuple(trace.actions() for trace in traces), _WALKS)
         self.assertEqual(
-            [(step.action, _fields(step.post)) for step in mapped.steps],
-            [(step.action, _fields(step.post)) for step in live.steps],
+            {action for trace in traces for action in trace.actions()},
+            set(ACTIONS.values()),
         )
-        self.assertEqual(_fields(mapped.init), _fields(live.init))
-        self.assertEqual(
-            mapped.actions(),
-            (
-                "DraftSubmit",
-                "TodoStart",
-                "InProgressSnooze",
-                "SnoozedResume",
-                "InProgressComplete",
-                "DoneArchive",
-                "ArchivedUnarchive",
-                "DoneReopen",
-                "TodoDelete",
-                "DeletedRestore",
-            ),
-        )
-        self.assertTrue(mapped.states()[-1]["submitted"])
-        self.assertEqual(mapped.states()[-1]["state"], "todo")
-        self.assertEqual(mapped.states()[-1]["deleted_at"], "unset")
+
+        self.assertEqual(_fields(traces[0].init), _with_title("task"))
+        self.assertEqual(traces[0].states()[-1]["state"], "done")
+        self.assertTrue(traces[0].states()[-1]["submitted"])
+        self.assertTrue(traces[0].states()[-1]["listed"])
+        self.assertEqual(traces[0].states()[-1]["completed_at"], "set")
+
+        self.assertEqual(_fields(traces[4].init), _with_title(""))
+        self.assertEqual(traces[4].states()[-1]["state"], "deleted")
+        self.assertFalse(traces[4].states()[-1]["submitted"])
+        self.assertEqual(traces[4].states()[-1]["deleted_at"], "set")
+
+        self.assertEqual(traces[6].steps, ())
+        self.assertEqual(_fields(traces[6].init), _with_title(""))
         self.assertTrue(
-            any(event.kind == "PY_UNWIND" and event.qualname == "TodoTask.submit" for event in logged)
+            any(
+                event.kind == "PY_UNWIND"
+                and event.qualname == "TodoTask.submit"
+                and event.exception is not None
+                and "titleNotEmpty" in event.exception
+                for event in logged
+            )
+        )
+        self.assertFalse(
+            any(
+                event.kind == "PY_RETURN" and event.qualname == "TodoTask.submit" and event.exception
+                for event in logged
+            )
         )
 
-        result = _run_tlc(trace_module(mapped), trace_config(INVARIANTS))
-        self.assertEqual(result.code, 0, result.output[-2000:])
-        self.assertIn("No error has been found.", result.output)
-        self.assertIn(
-            f"The depth of the complete state graph search is {len(mapped.states())}.",
-            result.output,
-        )
-        _assert_actions_covered(self, result.output, mapped.actions())
+        for mapped in traces:
+            result = _run_tlc(trace_module(mapped), trace_config(INVARIANTS))
+            self.assertEqual(result.code, 0, result.output[-2000:])
+            self.assertIn("No error has been found.", result.output)
+            self.assertIn(
+                f"The depth of the complete state graph search is {len(mapped.states())}.",
+                result.output,
+            )
+            _assert_actions_covered(self, result.output, mapped.actions())
 
     def test_reader_rejects_a_different_shape(self) -> None:
         with self.assertRaises(AlignmentError):
@@ -108,11 +112,30 @@ class JsonlTraceTests(unittest.TestCase):
                             "thread_name": "MainThread",
                             "file": "task.py",
                             "line": 1,
-                            "callable": "submit",
+                            "roles": ["return"],
                         }
                     )
                 ]
             )
+
+        parsed = read_jsonl(
+            [
+                json.dumps(
+                    {
+                        "kind": "CALL",
+                        "qualname": "TodoTask.submit",
+                        "thread_id": 1,
+                        "thread_name": "MainThread",
+                        "file": "todo_app/task.py",
+                        "line": 4,
+                        "arg0": "TodoTask(state='draft', title='task', listed=False)",
+                        "callable": "todo_app.task.TodoTask._apply",
+                    }
+                )
+            ]
+        )
+        self.assertEqual(parsed[0].callable, "todo_app.task.TodoTask._apply")
+        self.assertIsNone(parsed[0].value)
 
 
 if __name__ == "__main__":

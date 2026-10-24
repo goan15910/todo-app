@@ -377,10 +377,10 @@ def trace(
         watch.stop()
 
 
-# JSON Lines written by the recorder command. Optional keys are omitted
-# when the event has no such payload. This is not a second event schema.
+# One JSON object from `python -m execution_events`. Payload keys are
+# omitted when the event has none. `callable` is the callee name.
 _LOG_REQUIRED = ("kind", "qualname", "thread_id", "thread_name", "file", "line")
-_LOG_OPTIONAL = ("value", "exception", "arg0", "task")
+_LOG_OPTIONAL = ("value", "exception", "arg0", "task", "callable")
 _LOG_KEYS = frozenset(_LOG_REQUIRED + _LOG_OPTIONAL)
 
 
@@ -398,32 +398,11 @@ class LogEvent:
     exception: str | None = None
     arg0: str | None = None
     task: str | None = None
-
-
-def record_from_event(event: ExecutionEvent) -> dict[str, object]:
-    """The recorder command's JSON object for one captured event."""
-
-    record: dict[str, object] = {
-        "kind": event.kind,
-        "qualname": event.qualname,
-        "thread_id": event.thread_id,
-        "thread_name": event.thread_name,
-        "file": event.filename,
-        "line": event.lineno,
-    }
-    if event.value is not None:
-        record["value"] = event.value
-    if event.exception is not None:
-        record["exception"] = event.exception
-    if event.arg0 is not None:
-        record["arg0"] = event.arg0
-    if event.task is not None:
-        record["task"] = event.task
-    return record
+    callable: str | None = None
 
 
 def read_jsonl(lines: Iterable[str]) -> tuple[LogEvent, ...]:
-    """Parse the recorder command's JSON Lines. Blank lines are ignored."""
+    """Parse JSON Lines from ``python -m execution_events``. Blank lines are ignored."""
 
     parsed: list[LogEvent] = []
     for lineno, raw in enumerate(lines, start=1):
@@ -453,6 +432,7 @@ def read_jsonl(lines: Iterable[str]) -> tuple[LogEvent, ...]:
                 exception=_optional_text(payload, "exception", lineno),
                 arg0=_optional_text(payload, "arg0", lineno),
                 task=_optional_text(payload, "task", lineno),
+                callable=_optional_text(payload, "callable", lineno),
             )
         )
     return tuple(parsed)
@@ -461,11 +441,11 @@ def read_jsonl(lines: Iterable[str]) -> tuple[LogEvent, ...]:
 def map_log(
     events: Iterable[LogEvent], alignment: Alignment, initial: SpecState
 ) -> MappedTrace:
-    """Replay a JSON Lines log through ``alignment``.
+    """Replay one task's JSON Lines through ``alignment``.
 
-    A successful return of a declared step is one spec action. The log does
-    not carry spec fields: ``initial`` is the record before the first step,
-    and ``alignment.effect`` is each successor. An unwind is not a step.
+    A successful return of a declared step is one spec action. ``initial``
+    is the record before the first step, and ``alignment.effect`` is each
+    successor. An unwind is not a step. This does not read ``arg0``.
     """
 
     if alignment.effect is None:
@@ -595,7 +575,6 @@ __all__ = [
     "TraceRun",
     "map_log",
     "read_jsonl",
-    "record_from_event",
     "trace",
     "trace_config",
     "trace_module",
