@@ -1,63 +1,42 @@
 # todo-app
 
-## Specification
+A task repository. Tasks move through draft, todo, in progress, snoozed, done, archived, and deleted.
 
-`spec/TodoTask.tla` is one task from Clew's b-full chart (`examples/todo/b-full.yaml`). TLC checks `TypeOK` and the chart guards as invariants: `TitleNotEmpty` and `CompletedAtSet`.
+## Layout
 
-GitHub Actions runs TLC on pull requests and on `main`. Locally, with Java 21:
+- `todo_app/domain` holds the task and the status rules.
+- `todo_app/application` holds the use cases and the repository port.
+- `todo_app/adapters` holds the in-memory repository.
+- `spec/TodoTask.tla` is the same lifecycle for a repository of at most `MaxTasks` tasks, plus get-by-id and list-by-status.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests
+```
+
+That run does not need Java. `tests/test_model_generated.py` is produced from the TLC state graph and then runs on its own. Regenerate it after a spec change:
 
 ```bash
 curl -fsSL -o /tmp/tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
-java -XX:+UseParallelGC -jar /tmp/tla2tools.jar spec/TodoTask.tla
+TLC_JAR=/tmp/tla2tools.jar python tools/generate_model_tests.py
 ```
+
+## Specification
+
+```bash
+java -XX:+UseParallelGC -jar /tmp/tla2tools.jar -metadir tlc-meta spec/TodoTask.tla
+```
+
+The bound is `MaxTasks` in `spec/TodoTask.cfg`.
 
 ## Mutation
 
-`mutants.py` is one fault per mutant. TLC judges a spec edit with `spec/TodoTask.cfg`. A Python edit is projected onto spec states and checked against the faithful `Next`.
+`mutmut` edits `todo_app` and reruns the unit tests. It does not edit the spec.
 
 ```bash
-TLC_JAR=tla2tools.jar python mutants.py
+python -m pip install mutmut==3.8.0 "pytest==8.3.5"
+python -m mutmut run
 ```
 
-## Injection guard
-
-`inject.py` walks three plans and scores one edit per cell with the same TLC judge: the chart fault grid, the conjuncts in `spec/TodoTask.cfg`, and the lineage of `TitleNotEmpty`. A trace is checked against the faithful `Next`. Ten cells are the same fault as a `mutants.py` mutant and are not new claims.
-
-```bash
-TLC_JAR=tla2tools.jar python inject.py
-```
-
-## Execution events
-
-`python -m execution_events` prints JSON Lines for one walk of the b-full task flow (`todo_app.task`, the same edges as `spec/TodoTask.tla`). Each line has `kind`, `qualname`, `thread_id`, `thread_name`, `file`, and `line`. `value`, `exception`, `arg0`, `task`, and `callable` are included when that event has them.
-
-```bash
-python -m execution_events
-```
-
-## Alignment
-
-Those events are calls and returns, not values of `task`. `event_alignment` is the declaration of which returns are spec steps. `todo_app.alignment` maps this task onto `spec/TodoTask.tla`: the action for each step, and the `task` record read from the live object. `submitted` is remembered there; the events do not carry it.
-
-```python
-import todo_app.task as tasks
-from event_alignment import trace
-from todo_app.alignment import todo_alignment
-
-with trace(todo_alignment, files=[tasks.__file__]) as run:
-    item = tasks.TodoTask("")
-    run.bind(item)
-    item.set_title("buy milk")
-    item.submit()
-
-mapped = run.mapped()
-```
-
-`python -m execution_events` prints one task after another. `task_traces` reads that log: a new `TodoTask` starts a draft, a successful return of a chart method is one spec step, and an unwind is not. The call's `arg0` repr supplies `state`, `title`, and `listed` before the step. Any non-empty title is the spec value `"task"`. Timestamps and `submitted` are not in the log; `effect` names those successors. `callable` is the callee, not a spec field.
-
-```python
-from event_alignment import read_jsonl
-from todo_app.alignment import task_traces
-
-traces = task_traces(read_jsonl(open("trace.jsonl")))
-```
+`mutmut` runs the same tests through its own runner. A mutant that is not killed fails the mutation job.

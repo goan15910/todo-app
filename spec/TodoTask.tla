@@ -1,117 +1,211 @@
 ---- MODULE TodoTask ----
 (***************************************************************************)
-(* One task from Clew's b-full chart                                      *)
-(* (examples/todo/b-full.yaml in https://github.com/goan15910/clew).      *)
-(* Each action is one chart edge. TitleNotEmpty and CompletedAtSet are    *)
-(* that chart's guards, lifted to state invariants.                       *)
+(* A bounded task repository. Each task follows the b-full lifecycle: the  *)
+(* same status changes as the one-task chart, and the same field writes    *)
+(* on each change. The repository can add a task, fetch one by id, and     *)
+(* list the ids that have a given status.                                  *)
 (*                                                                         *)
-(* `submitted` is a history variable. The chart has no such field. It     *)
-(* records that draft --SUBMIT--> todo has happened, which is the only    *)
-(* edge guarded by titleNotEmpty. Restore of a deleted draft reaches      *)
-(* `todo` without that guard, so "todo implies a non-empty title" is not  *)
-(* an invariant.                                                           *)
+(* MaxTasks in the config bounds how many tasks TLC explores. Titles are   *)
+(* "" or "task" because submit only reads emptiness, and nothing changes   *)
+(* a title after it is chosen. Timestamps are "unset" or "set".            *)
 (*                                                                         *)
-(* Title is "" or the representative "task". The guard only reads         *)
-(* emptiness, and no action changes the title, so one non-empty value is  *)
-(* enough. Timestamps are "unset" or "set": the guards and effects talk   *)
-(* about presence, not clock values. A draft starts unlisted; markListed  *)
-(* is what lists it.                                                       *)
+(* `submitted` is history. The chart has no such field. It records that    *)
+(* draft --SUBMIT--> todo has happened, which is the only step guarded by  *)
+(* a non-empty title. Restoring a deleted draft reaches todo without that  *)
+(* step, so a todo may still have an empty title.                          *)
+(*                                                                         *)
+(* Get and Listed do not change the repository. The query invariants say   *)
+(* what they return.                                                       *)
 (***************************************************************************)
+
+EXTENDS Integers
+
+CONSTANT MaxTasks
+
+ASSUME MaxTasks \in Nat /\ MaxTasks >= 1
 
 States == {
   "draft", "todo", "inProgress", "snoozed", "done", "archived", "deleted"
 }
 Titles == {"", "task"}
 Marks == {"unset", "set"}
+Missing == "missing"
 
-VARIABLE task
+VARIABLES tasks, seq
 
-TypeOK ==
-  task \in [
-    state: States,
-    title: Titles,
-    listed: BOOLEAN,
-    started_at: Marks,
-    completed_at: Marks,
-    wake_at: Marks,
-    deleted_at: Marks,
-    submitted: BOOLEAN
+Draft(title) ==
+  [
+    state |-> "draft",
+    title |-> title,
+    listed |-> FALSE,
+    started_at |-> "unset",
+    completed_at |-> "unset",
+    wake_at |-> "unset",
+    deleted_at |-> "unset",
+    submitted |-> FALSE
   ]
 
-\* Guard titleNotEmpty, reads title, on draft --SUBMIT--> todo.
-TitleNotEmpty == task.submitted => (task.title /= "")
+IsTask(task) ==
+  /\ task.state \in States
+  /\ task.title \in Titles
+  /\ task.listed \in BOOLEAN
+  /\ task.started_at \in Marks
+  /\ task.completed_at \in Marks
+  /\ task.wake_at \in Marks
+  /\ task.deleted_at \in Marks
+  /\ task.submitted \in BOOLEAN
 
-\* Guard completedAtSet, reads completed_at, on done --ARCHIVE--> archived.
-CompletedAtSet == (task.state = "archived") => (task.completed_at /= "unset")
+IsStored(record) ==
+  /\ record.id \in 1..MaxTasks
+  /\ IsTask(record.task)
+
+TypeOK ==
+  /\ seq \in 1..(MaxTasks + 1)
+  /\ \A record \in tasks: IsStored(record)
+  /\ \A left, right \in tasks: left.id = right.id => left = right
+  /\ \A record \in tasks: record.id < seq
+
+IdsDense ==
+  \A id \in 1..(seq - 1): \E record \in tasks: record.id = id
+
+TitleNotEmpty ==
+  \A record \in tasks: record.task.submitted => record.task.title /= ""
+
+CompletedAtSet ==
+  \A record \in tasks:
+    (record.task.state = "archived") => (record.task.completed_at /= "unset")
+
+DraftUnlisted ==
+  \A record \in tasks:
+    (record.task.state = "draft") =>
+      /\ record.task.listed = FALSE
+      /\ record.task.submitted = FALSE
+
+ArchivedUnlisted ==
+  \A record \in tasks:
+    (record.task.state = "archived") => (record.task.listed = FALSE)
+
+DeletedIffStamp ==
+  \A record \in tasks:
+    (record.task.state = "deleted") <=> (record.task.deleted_at = "set")
+
+WakeOnlyWhileSnoozed ==
+  \A record \in tasks:
+    (record.task.wake_at = "set") => (record.task.state = "snoozed")
+
+Get(id) ==
+  IF \E record \in tasks: record.id = id
+  THEN (CHOOSE record \in tasks: record.id = id).task
+  ELSE Missing
+
+Listed(status) ==
+  {record.id : record \in {item \in tasks : item.task.state = status}}
+
+ListedAll == {record.id : record \in tasks}
+
+GetStored ==
+  \A record \in tasks: Get(record.id) = record.task
+
+\* A present id returns its task (GetStored). TLC will not compare that
+\* record with the Missing marker, so absence is the direction checked here.
+GetMissing ==
+  \A id \in 1..MaxTasks:
+    (~\E record \in tasks: record.id = id) => (Get(id) = Missing)
+
+FilterCovers ==
+  /\ ListedAll = UNION {Listed(status) : status \in States}
+  /\ \A left, right \in States:
+       left /= right => Listed(left) \intersect Listed(right) = {}
 
 Init ==
-  \E chosen \in Titles:
-    task = [
-      state |-> "draft",
-      title |-> chosen,
-      listed |-> FALSE,
-      started_at |-> "unset",
-      completed_at |-> "unset",
-      wake_at |-> "unset",
-      deleted_at |-> "unset",
-      submitted |-> FALSE
-    ]
+  /\ tasks = {}
+  /\ seq = 1
+
+Add ==
+  /\ seq <= MaxTasks
+  /\ \E title \in Titles:
+       /\ tasks' = tasks \union {[id |-> seq, task |-> Draft(title)]}
+       /\ seq' = seq + 1
+
+Replace(record, updated) ==
+  /\ tasks' = (tasks \ {record}) \union {[record EXCEPT !.task = updated]}
+  /\ UNCHANGED seq
 
 DraftSubmit ==
-  /\ task.state = "draft"
-  /\ task.title /= ""
-  /\ task' = [task EXCEPT !.state = "todo", !.listed = TRUE, !.submitted = TRUE]
+  \E record \in tasks:
+    /\ record.task.state = "draft"
+    /\ record.task.title /= ""
+    /\ Replace(record, [
+         record.task EXCEPT !.state = "todo", !.listed = TRUE, !.submitted = TRUE
+       ])
 
 DraftDelete ==
-  /\ task.state = "draft"
-  /\ task' = [task EXCEPT !.state = "deleted", !.deleted_at = "set"]
+  \E record \in tasks:
+    /\ record.task.state = "draft"
+    /\ Replace(record, [record.task EXCEPT !.state = "deleted", !.deleted_at = "set"])
 
 TodoStart ==
-  /\ task.state = "todo"
-  /\ task' = [task EXCEPT !.state = "inProgress", !.started_at = "set"]
+  \E record \in tasks:
+    /\ record.task.state = "todo"
+    /\ Replace(record, [
+         record.task EXCEPT !.state = "inProgress", !.started_at = "set"
+       ])
 
 TodoComplete ==
-  /\ task.state = "todo"
-  /\ task' = [task EXCEPT !.state = "done", !.completed_at = "set"]
+  \E record \in tasks:
+    /\ record.task.state = "todo"
+    /\ Replace(record, [record.task EXCEPT !.state = "done", !.completed_at = "set"])
 
 TodoSnooze ==
-  /\ task.state = "todo"
-  /\ task' = [task EXCEPT !.state = "snoozed", !.wake_at = "set"]
+  \E record \in tasks:
+    /\ record.task.state = "todo"
+    /\ Replace(record, [record.task EXCEPT !.state = "snoozed", !.wake_at = "set"])
 
 TodoDelete ==
-  /\ task.state = "todo"
-  /\ task' = [task EXCEPT !.state = "deleted", !.deleted_at = "set"]
+  \E record \in tasks:
+    /\ record.task.state = "todo"
+    /\ Replace(record, [record.task EXCEPT !.state = "deleted", !.deleted_at = "set"])
 
 InProgressSnooze ==
-  /\ task.state = "inProgress"
-  /\ task' = [task EXCEPT !.state = "snoozed", !.wake_at = "set"]
+  \E record \in tasks:
+    /\ record.task.state = "inProgress"
+    /\ Replace(record, [record.task EXCEPT !.state = "snoozed", !.wake_at = "set"])
 
 InProgressComplete ==
-  /\ task.state = "inProgress"
-  /\ task' = [task EXCEPT !.state = "done", !.completed_at = "set"]
+  \E record \in tasks:
+    /\ record.task.state = "inProgress"
+    /\ Replace(record, [record.task EXCEPT !.state = "done", !.completed_at = "set"])
 
 SnoozedResume ==
-  /\ task.state = "snoozed"
-  /\ task' = [task EXCEPT !.state = "inProgress", !.wake_at = "unset"]
+  \E record \in tasks:
+    /\ record.task.state = "snoozed"
+    /\ Replace(record, [
+         record.task EXCEPT !.state = "inProgress", !.wake_at = "unset"
+       ])
 
 DoneReopen ==
-  /\ task.state = "done"
-  /\ task' = [task EXCEPT !.state = "todo", !.completed_at = "unset"]
+  \E record \in tasks:
+    /\ record.task.state = "done"
+    /\ Replace(record, [record.task EXCEPT !.state = "todo", !.completed_at = "unset"])
 
 DoneArchive ==
-  /\ task.state = "done"
-  /\ task.completed_at /= "unset"
-  /\ task' = [task EXCEPT !.state = "archived", !.listed = FALSE]
+  \E record \in tasks:
+    /\ record.task.state = "done"
+    /\ record.task.completed_at /= "unset"
+    /\ Replace(record, [record.task EXCEPT !.state = "archived", !.listed = FALSE])
 
 ArchivedUnarchive ==
-  /\ task.state = "archived"
-  /\ task' = [task EXCEPT !.state = "done", !.listed = TRUE]
+  \E record \in tasks:
+    /\ record.task.state = "archived"
+    /\ Replace(record, [record.task EXCEPT !.state = "done", !.listed = TRUE])
 
 DeletedRestore ==
-  /\ task.state = "deleted"
-  /\ task' = [task EXCEPT !.state = "todo", !.deleted_at = "unset"]
+  \E record \in tasks:
+    /\ record.task.state = "deleted"
+    /\ Replace(record, [record.task EXCEPT !.state = "todo", !.deleted_at = "unset"])
 
 Next ==
+  \/ Add
   \/ DraftSubmit
   \/ DraftDelete
   \/ TodoStart
@@ -126,6 +220,6 @@ Next ==
   \/ ArchivedUnarchive
   \/ DeletedRestore
 
-Spec == Init /\ [][Next]_task
+Spec == Init /\ [][Next]_<<tasks, seq>>
 
 =============================================================================
