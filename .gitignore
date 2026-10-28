@@ -3,3 +3,6 @@ __pycache__/
 states/
 tlc-meta/
 tla2tools.jar
+.mutmut-cache
+mutants/
+.coverage
