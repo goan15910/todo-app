@@ -28,6 +28,9 @@ jobs:
       - name: Run TLC
         run: java -XX:+UseParallelGC -jar tla2tools.jar -metadir tlc-meta spec/TodoTask.tla
 
+      - name: Check lifecycle scenarios
+        run: TLC_JAR=$PWD/tla2tools.jar python tools/generate_model_tests.py --check --replay
+
   tests:
     name: Python
     runs-on: ubuntu-latest

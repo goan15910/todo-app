@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import pathlib
+import re
 import unittest
 from datetime import datetime, timezone
 
@@ -88,6 +91,13 @@ def _reach(status: Status):
     else:
         raise AssertionError(status)
     return service, task_id
+
+
+def _project_root() -> pathlib.Path:
+    for candidate in pathlib.Path(__file__).resolve().parents:
+        if (candidate / "spec" / "TodoTask.tla").is_file():
+            return candidate
+    raise AssertionError("spec/TodoTask.tla not found")
 
 
 def _view(task: Task) -> tuple:
@@ -316,8 +326,28 @@ class TaskServiceTests(unittest.TestCase):
                     )
                 self.assertEqual(str(bad_stamp.exception), f"{name} must be a datetime or None")
 
-    def test_generated_tests_do_not_call_the_checker(self) -> None:
-        source = pathlib.Path(__file__).with_name("test_model_generated.py").read_text()
+    def test_lifecycle_traces_cover_the_spec(self) -> None:
+        root = _project_root()
+        spec_path = root / "spec" / "TodoTask.tla"
+        spec = spec_path.read_text(encoding="utf-8")
+        match = re.search(r"(?m)^Next ==\n((?:  \\/ \w+\n)+)", spec)
+        self.assertIsNotNone(match)
+        assert match is not None
+        expected = set(re.findall(r"\\/ (\w+)", match.group(1)))
+        index = json.loads((root / "tests" / "model" / "traces.json").read_text(encoding="utf-8"))
+        self.assertEqual(index["spec_sha256"], hashlib.sha256(spec_path.read_bytes()).hexdigest())
+        cfg = (root / "spec" / "TodoTask.cfg").read_text(encoding="utf-8")
+        bound = re.search(r"(?m)^MaxTasks\s*=\s*(\d+)\s*$", cfg)
+        self.assertIsNotNone(bound)
+        assert bound is not None
+        self.assertEqual(index["max_tasks"], int(bound.group(1)))
+        covered: set[str] = set()
+        source = (root / "tests" / "test_lifecycle_scenarios.py").read_text(encoding="utf-8")
+        for trace in index["traces"]:
+            self.assertTrue(trace["id"])
+            self.assertIn(f"Trace: {trace['id']} ", source)
+            covered.update(trace["covers"])
+        self.assertEqual(covered, expected)
         self.assertNotIn("subprocess", source)
         self.assertNotIn("tla2tools", source)
         self.assertNotIn("TodoTask", source)

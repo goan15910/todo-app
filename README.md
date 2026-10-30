@@ -15,12 +15,14 @@ A task repository. Tasks move through draft, todo, in progress, snoozed, done, a
 python -m unittest discover -s tests
 ```
 
-That run does not need Java. `tests/test_model_generated.py` is produced from the TLC state graph and then runs on its own. Regenerate it after a spec change:
+That run does not need Java. `tests/test_lifecycle_scenarios.py` is a few lifecycle scenarios produced from the TLC state graph. Each docstring names a trace id from `tests/model/traces.json`. Regenerate both after a spec change:
 
 ```bash
 curl -fsSL -o /tmp/tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
 TLC_JAR=/tmp/tla2tools.jar python tools/generate_model_tests.py
 ```
+
+`TLC_JAR=/tmp/tla2tools.jar python tools/generate_model_tests.py --check` fails if those files drift. It does not rewrite them. The TLC job also replays every state-graph edge in a temporary directory; that replay is not committed.
 
 ## Specification
 

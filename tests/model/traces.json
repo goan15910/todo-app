@@ -1,0 +1,86 @@
+{
+  "spec_sha256": "4e2022f2cecf17ed5793041167e3e43e0ee4d061a169980d6a774d068dc8aead",
+  "max_tasks": 2,
+  "traces": [
+    {
+      "id": "41bade2b696c",
+      "actions": [
+        "Add",
+        "DraftSubmit",
+        "TodoStart",
+        "InProgressSnooze",
+        "SnoozedResume",
+        "InProgressComplete",
+        "DoneArchive",
+        "ArchivedUnarchive",
+        "DoneReopen",
+        "TodoDelete",
+        "DeletedRestore"
+      ],
+      "covers": [
+        "Add",
+        "DraftSubmit",
+        "TodoStart",
+        "InProgressSnooze",
+        "SnoozedResume",
+        "InProgressComplete",
+        "DoneArchive",
+        "ArchivedUnarchive",
+        "DoneReopen",
+        "TodoDelete",
+        "DeletedRestore"
+      ]
+    },
+    {
+      "id": "1354d470ca81",
+      "actions": [
+        "Add",
+        "DraftDelete",
+        "DeletedRestore"
+      ],
+      "covers": [
+        "Add",
+        "DraftDelete",
+        "DeletedRestore"
+      ]
+    },
+    {
+      "id": "df23e4ac8147",
+      "actions": [
+        "Add",
+        "DraftSubmit",
+        "TodoComplete"
+      ],
+      "covers": [
+        "Add",
+        "DraftSubmit",
+        "TodoComplete"
+      ]
+    },
+    {
+      "id": "48702ca234d0",
+      "actions": [
+        "Add",
+        "DraftSubmit",
+        "TodoSnooze"
+      ],
+      "covers": [
+        "Add",
+        "DraftSubmit",
+        "TodoSnooze"
+      ]
+    },
+    {
+      "id": "1fe73c5c007a",
+      "actions": [
+        "Add",
+        "Add",
+        "DraftSubmit"
+      ],
+      "covers": [
+        "Add",
+        "DraftSubmit"
+      ]
+    }
+  ]
+}
