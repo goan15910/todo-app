@@ -7,6 +7,21 @@ from typing import Protocol
 from todo_app.domain.task import Status, Task
 
 
+class IdAllocator(Protocol):
+    """Source of new task ids.
+
+    ``peek`` is the next id ``allocate`` will return. Allocation starts at 1
+    and advances by one. The mapping does not read this port: ``seq`` is
+    derived from the stored ids.
+    """
+
+    def peek(self) -> int:
+        """Return the next id without advancing."""
+
+    def allocate(self) -> int:
+        """Return the next id and advance."""
+
+
 class TaskRepository(Protocol):
     """Tasks stored by id.
 

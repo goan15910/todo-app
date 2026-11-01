@@ -6,3 +6,4 @@ tla2tools.jar
 .mutmut-cache
 mutants/
 .coverage
+.hypothesis/

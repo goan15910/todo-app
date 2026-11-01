@@ -150,11 +150,19 @@ class Task:
         self._status = Status.TODO
         self._listed = True
 
-    def delete(self) -> None:
-        if self._status is not Status.DRAFT and self._status is not Status.TODO:
+    def delete_draft(self) -> None:
+        """DraftDelete: a draft becomes deleted."""
+
+        if self._status is not Status.DRAFT:
             self._reject("delete")
-        self._status = Status.DELETED
-        self._deleted_at = _now()
+        self._mark_deleted()
+
+    def delete_todo(self) -> None:
+        """TodoDelete: a todo becomes deleted."""
+
+        if self._status is not Status.TODO:
+            self._reject("delete")
+        self._mark_deleted()
 
     def start(self) -> None:
         if self._status is not Status.TODO:
@@ -162,19 +170,33 @@ class Task:
         self._status = Status.IN_PROGRESS
         self._started_at = _now()
 
-    def complete(self) -> None:
-        if self._status is not Status.TODO and self._status is not Status.IN_PROGRESS:
-            self._reject("complete")
-        self._status = Status.DONE
-        self._completed_at = _now()
+    def complete_todo(self) -> None:
+        """TodoComplete: a todo becomes done."""
 
-    def snooze(self, wake_at: datetime) -> None:
-        if not isinstance(wake_at, datetime):
-            raise TypeError("wake_at must be a datetime")
-        if self._status is not Status.TODO and self._status is not Status.IN_PROGRESS:
+        if self._status is not Status.TODO:
+            self._reject("complete")
+        self._mark_done()
+
+    def complete_in_progress(self) -> None:
+        """InProgressComplete: an in-progress task becomes done."""
+
+        if self._status is not Status.IN_PROGRESS:
+            self._reject("complete")
+        self._mark_done()
+
+    def snooze_todo(self, wake_at: datetime) -> None:
+        """TodoSnooze: a todo becomes snoozed."""
+
+        if self._status is not Status.TODO:
             self._reject("snooze")
-        self._status = Status.SNOOZED
-        self._wake_at = wake_at
+        self._mark_snoozed(wake_at)
+
+    def snooze_in_progress(self, wake_at: datetime) -> None:
+        """InProgressSnooze: an in-progress task becomes snoozed."""
+
+        if self._status is not Status.IN_PROGRESS:
+            self._reject("snooze")
+        self._mark_snoozed(wake_at)
 
     def resume(self) -> None:
         if self._status is not Status.SNOOZED:
@@ -207,6 +229,20 @@ class Task:
             self._reject("restore")
         self._status = Status.TODO
         self._deleted_at = None
+
+    def _mark_deleted(self) -> None:
+        self._status = Status.DELETED
+        self._deleted_at = _now()
+
+    def _mark_done(self) -> None:
+        self._status = Status.DONE
+        self._completed_at = _now()
+
+    def _mark_snoozed(self, wake_at: datetime) -> None:
+        if not isinstance(wake_at, datetime):
+            raise TypeError("wake_at must be a datetime")
+        self._status = Status.SNOOZED
+        self._wake_at = wake_at
 
     def _reject(self, action: str) -> None:
         raise TaskRejected(self._id, self._status.value, action)
