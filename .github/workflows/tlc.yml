@@ -43,6 +43,38 @@ jobs:
       - name: Validate recorded traces
         run: TLC_JAR=$PWD/tla2tools.jar python tools/validate_traces.py
 
+  tracker-traces:
+    name: Tracker traces
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download TLC
+        run: |
+          curl -fsSL -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+          echo "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88  tla2tools.jar" | sha256sum -c -
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Validate tracker traces through every stack
+        run: TLC_JAR=$PWD/tla2tools.jar python tools/validate_tracker_traces.py
+
+      - name: Trace validation tests
+        run: TLC_JAR=$PWD/tla2tools.jar python -m unittest tests.test_tracker_trace_validation tests.test_trace_validation -v
+
   tests:
     name: Python
     runs-on: ubuntu-latest
