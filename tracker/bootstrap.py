@@ -13,3 +13,10 @@ UnitOfWorkFactory = Callable[[], AbstractUnitOfWork]
 def in_memory() -> UnitOfWorkFactory:
     database = FakeDatabase()
     return lambda: FakeUnitOfWork(database)
+
+
+def sqlite(url: str = "sqlite+pysqlite:///:memory:") -> UnitOfWorkFactory:
+    from tracker.adapters.sqlalchemy.unit_of_work import SqlAlchemyUnitOfWork, sqlite_engine
+
+    engine = sqlite_engine(url)
+    return lambda: SqlAlchemyUnitOfWork(engine)
