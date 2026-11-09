@@ -7,3 +7,4 @@ tla2tools.jar
 mutants/
 .coverage
 .hypothesis/
+tracker.db

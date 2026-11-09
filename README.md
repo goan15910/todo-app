@@ -16,8 +16,12 @@ A task repository. Tasks move through draft, todo, in progress, snoozed, done, a
 
 - `tracker/domain` holds the `Project` aggregate, its `Issue` entities, and the rules.
 - `tracker/service_layer` holds one use case per spec action, the `AbstractUnitOfWork` and repository ports, and the service-layer errors.
-- `tracker/adapters` holds the in-memory repository and a unit of work that really rolls back.
-- `tracker/bootstrap.py` wires them.
+- `tracker/adapters/memory.py` holds the in-memory repository and a unit of work that really rolls back.
+- `tracker/adapters/sqlalchemy` holds the schema, a repository that reconstitutes a project from rows and writes it back with an optimistic version check, and a unit of work over one connection and one transaction.
+- `tracker/entrypoints/fastapi_app.py` is the HTTP adapter. `uvicorn tracker.entrypoints.main:app` serves it over `tracker.db`.
+- `tracker/bootstrap.py` wires either stack: `in_memory()` or `sqlite(url)`.
+
+`tests/test_tracker_adapters.py` runs one unit-of-work contract against both adapters. `tests/test_tracker_http.py` drives every route over SQLite. Dependencies are pinned in `requirements.txt`.
 
 `tests/test_tracker_services.py` drives every rule through the service layer. The mutation job covers `tracker/domain` and `tracker/service_layer`; adapters and entrypoints are excluded from mutation and covered by their own tests.
 
