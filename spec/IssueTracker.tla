@@ -1,125 +1,107 @@
 ---- MODULE IssueTracker ----
 (***************************************************************************)
-(* A bounded issue tracker. Projects own a dense issue numbering. Issues   *)
-(* follow backlog -> todo -> inProgress -> inReview -> done, may be        *)
-(* canceled while open, and may be reopened once closed. An issue may be   *)
-(* blocked by other issues of the same project; the blocking graph has no  *)
+(* A bounded issue tracker. A project is the aggregate: it owns a dense   *)
+(* issue numbering, and every rule about issues holds inside one project. *)
+(* Issues follow backlog -> todo -> inProgress -> inReview -> done, may be *)
+(* canceled while open, and may be reopened once closed. An issue may be  *)
+(* blocked by other issues of its project. The blocking graph has no      *)
 (* cycles, and approval waits for every blocker to be closed.             *)
 (*                                                                         *)
-(* The variables are what the application persists through its unit of    *)
-(* work: the project table and the issue table. Ids are dense because the *)
-(* tracker never deletes a row. Titles are "" or "text" because creation   *)
-(* only reads emptiness. Timestamps are "unset" or "set". Comments are a   *)
-(* count. Keys and users are drawn from small fixed sets.                 *)
+(* The one variable is what the application persists through its unit of  *)
+(* work: the projects, by key, each with its issues by number. Numbers    *)
+(* are dense because the tracker never deletes an issue. Titles are "" or *)
+(* "text" because creation only reads emptiness. Timestamps are "unset"   *)
+(* or "set". Comments are a count. Keys and users are small fixed sets.   *)
 (*                                                                         *)
-(* Every action is one committed unit of work. An action whose guard is    *)
-(* false is a refused command: the application rolls back and nothing     *)
-(* changes. The trace checker uses both facts.                            *)
+(* Every action is one committed unit of work on one project. An action   *)
+(* whose guard is false is a refused command: the application rolls back  *)
+(* and nothing changes. The trace checker uses both facts.                *)
 (***************************************************************************)
 
 EXTENDS Integers, FiniteSets, TLC
 
-CONSTANTS MaxProjects, MaxIssues, MaxComments
+CONSTANTS Keys, Users, MaxIssues, MaxComments
 
-ASSUME MaxProjects \in Nat /\ MaxProjects >= 1
+ASSUME Keys /= {} /\ \A key \in Keys : key \in STRING
+ASSUME Users /= {} /\ \A user \in Users : user \in STRING
 ASSUME MaxIssues \in Nat /\ MaxIssues >= 1
 ASSUME MaxComments \in Nat
 
-Keys == {"ENG", "OPS"}
-Users == {"alice", "bob"}
 Statuses == {"backlog", "todo", "inProgress", "inReview", "done", "canceled"}
 Titles == {"", "text"}
 Marks == {"unset", "set"}
 Unassigned == "unset"
 
-VARIABLES projects, issues
-
-vars == <<projects, issues>>
-
-ProjectIds == DOMAIN projects
-IssueIds == DOMAIN issues
-NextProject == Cardinality(ProjectIds) + 1
-NextIssue == Cardinality(IssueIds) + 1
+VARIABLE projects
 
 Open(status) == status \in {"backlog", "todo", "inProgress", "inReview"}
 Closed(status) == status \in {"done", "canceled"}
 Active(status) == status \in {"inProgress", "inReview"}
 
-IssuesOf(p) == {i \in IssueIds : issues[i].project = p}
+Numbers(key) == DOMAIN projects[key].issues
+Issue(key, n) == projects[key].issues[n]
+NextNumber(key) == Cardinality(Numbers(key)) + 1
 
-RECURSIVE Upstream(_, _)
-Upstream(frontier, seen) ==
+RECURSIVE Upstream(_, _, _)
+Upstream(key, frontier, seen) ==
   IF frontier = {} THEN seen
-  ELSE LET next == (UNION {issues[j].blocked_by : j \in frontier}) \ seen
-       IN Upstream(next, seen \union next)
+  ELSE LET next == (UNION {Issue(key, j).blocked_by : j \in frontier}) \ seen
+       IN Upstream(key, next, seen \union next)
 
-\* Every issue that blocks i, directly or through other blockers.
-TransitiveBlockers(i) == Upstream(issues[i].blocked_by, issues[i].blocked_by)
+\* Every issue that blocks n, directly or through other blockers.
+TransitiveBlockers(key, n) ==
+  Upstream(key, Issue(key, n).blocked_by, Issue(key, n).blocked_by)
 
-IsProject(record) ==
-  /\ record.key \in Keys
-  /\ record.next \in 1..(MaxIssues + 1)
-
-IsIssue(record) ==
-  /\ record.project \in ProjectIds
-  /\ record.number \in 1..MaxIssues
+IsIssue(key, record) ==
   /\ record.title \in Titles
   /\ record.status \in Statuses
   /\ record.assignee \in Users \union {Unassigned}
-  /\ record.blocked_by \subseteq IssueIds
+  /\ record.blocked_by \subseteq Numbers(key)
   /\ record.comments \in Nat
   /\ record.started_at \in Marks
   /\ record.completed_at \in Marks
   /\ record.canceled_at \in Marks
 
 TypeOK ==
-  /\ ProjectIds = 1..Cardinality(ProjectIds)
-  /\ Cardinality(ProjectIds) <= MaxProjects
-  /\ IssueIds = 1..Cardinality(IssueIds)
-  /\ Cardinality(IssueIds) <= MaxIssues
-  /\ \A p \in ProjectIds : IsProject(projects[p])
-  /\ \A i \in IssueIds : IsIssue(issues[i])
-
-KeysUnique ==
-  \A p, q \in ProjectIds : projects[p].key = projects[q].key => p = q
-
-NumbersDense ==
-  \A p \in ProjectIds :
-    /\ {issues[i].number : i \in IssuesOf(p)} = 1..(projects[p].next - 1)
-    /\ \A i, j \in IssuesOf(p) : issues[i].number = issues[j].number => i = j
+  /\ DOMAIN projects \subseteq Keys
+  /\ \A key \in DOMAIN projects :
+       /\ Numbers(key) = 1..Cardinality(Numbers(key))
+       /\ Cardinality(Numbers(key)) <= MaxIssues
+       /\ \A n \in Numbers(key) : IsIssue(key, Issue(key, n))
 
 TitleNotEmpty ==
-  \A i \in IssueIds : issues[i].title /= ""
+  \A key \in DOMAIN projects : \A n \in Numbers(key) : Issue(key, n).title /= ""
 
 ActiveAssigned ==
-  \A i \in IssueIds : Active(issues[i].status) => issues[i].assignee /= Unassigned
+  \A key \in DOMAIN projects : \A n \in Numbers(key) :
+    Active(Issue(key, n).status) => Issue(key, n).assignee /= Unassigned
 
 ActiveStarted ==
-  \A i \in IssueIds : Active(issues[i].status) => issues[i].started_at = "set"
+  \A key \in DOMAIN projects : \A n \in Numbers(key) :
+    Active(Issue(key, n).status) => Issue(key, n).started_at = "set"
 
 CompletedIffDone ==
-  \A i \in IssueIds : (issues[i].completed_at = "set") <=> (issues[i].status = "done")
+  \A key \in DOMAIN projects : \A n \in Numbers(key) :
+    (Issue(key, n).completed_at = "set") <=> (Issue(key, n).status = "done")
 
 CanceledIffCanceled ==
-  \A i \in IssueIds : (issues[i].canceled_at = "set") <=> (issues[i].status = "canceled")
+  \A key \in DOMAIN projects : \A n \in Numbers(key) :
+    (Issue(key, n).canceled_at = "set") <=> (Issue(key, n).status = "canceled")
 
-BlockersSameProject ==
-  \A i \in IssueIds : \A b \in issues[i].blocked_by : issues[b].project = issues[i].project
+NoSelfBlock ==
+  \A key \in DOMAIN projects : \A n \in Numbers(key) : n \notin Issue(key, n).blocked_by
 
 NoBlockCycles ==
-  \A i \in IssueIds : i \notin TransitiveBlockers(i)
+  \A key \in DOMAIN projects : \A n \in Numbers(key) : n \notin TransitiveBlockers(key, n)
 
 CommentsBounded ==
-  \A i \in IssueIds : issues[i].comments <= MaxComments
+  \A key \in DOMAIN projects : \A n \in Numbers(key) : Issue(key, n).comments <= MaxComments
 
 Init ==
-  /\ projects = [p \in {} |-> 0]
-  /\ issues = [i \in {} |-> 0]
+  projects = [key \in {} |-> 0]
 
-NewIssue(p, title) ==
+NewIssue(title) ==
   [
-    project |-> p,
-    number |-> projects[p].next,
     title |-> title,
     status |-> "backlog",
     assignee |-> Unassigned,
@@ -132,120 +114,125 @@ NewIssue(p, title) ==
 
 CreateProject(key) ==
   /\ key \in Keys
-  /\ Cardinality(ProjectIds) < MaxProjects
-  /\ \A p \in ProjectIds : projects[p].key /= key
-  /\ projects' = projects @@ (NextProject :> [key |-> key, next |-> 1])
-  /\ UNCHANGED issues
+  /\ key \notin DOMAIN projects
+  /\ projects' = projects @@ (key :> [issues |-> [n \in {} |-> 0]])
 
-CreateIssue(p, title) ==
-  /\ p \in ProjectIds
+CreateIssue(key, title) ==
+  /\ key \in DOMAIN projects
   /\ title \in Titles
   /\ title /= ""
-  /\ Cardinality(IssueIds) < MaxIssues
-  /\ issues' = issues @@ (NextIssue :> NewIssue(p, title))
-  /\ projects' = [projects EXCEPT ![p].next = @ + 1]
+  /\ Cardinality(Numbers(key)) < MaxIssues
+  /\ projects' = [projects EXCEPT
+       ![key].issues = @ @@ (NextNumber(key) :> NewIssue(title))]
 
-Triage(i) ==
-  /\ i \in IssueIds
-  /\ issues[i].status = "backlog"
-  /\ issues' = [issues EXCEPT ![i].status = "todo"]
-  /\ UNCHANGED projects
+Triage(key, n) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ Issue(key, n).status = "backlog"
+  /\ projects' = [projects EXCEPT ![key].issues[n].status = "todo"]
 
-Assign(i, user) ==
-  /\ i \in IssueIds
+Assign(key, n, user) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
   /\ user \in Users
-  /\ Open(issues[i].status)
-  /\ issues[i].assignee /= user
-  /\ issues' = [issues EXCEPT ![i].assignee = user]
-  /\ UNCHANGED projects
+  /\ Open(Issue(key, n).status)
+  /\ Issue(key, n).assignee /= user
+  /\ projects' = [projects EXCEPT ![key].issues[n].assignee = user]
 
-Unassign(i) ==
-  /\ i \in IssueIds
-  /\ issues[i].assignee /= Unassigned
-  /\ ~Active(issues[i].status)
-  /\ issues' = [issues EXCEPT ![i].assignee = Unassigned]
-  /\ UNCHANGED projects
+Unassign(key, n) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ Issue(key, n).assignee /= Unassigned
+  /\ ~Active(Issue(key, n).status)
+  /\ projects' = [projects EXCEPT ![key].issues[n].assignee = Unassigned]
 
-Start(i) ==
-  /\ i \in IssueIds
-  /\ issues[i].status = "todo"
-  /\ issues[i].assignee /= Unassigned
-  /\ issues' = [issues EXCEPT ![i].status = "inProgress", ![i].started_at = "set"]
-  /\ UNCHANGED projects
+Start(key, n) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ Issue(key, n).status = "todo"
+  /\ Issue(key, n).assignee /= Unassigned
+  /\ projects' = [projects EXCEPT
+       ![key].issues[n].status = "inProgress",
+       ![key].issues[n].started_at = "set"]
 
-SubmitReview(i) ==
-  /\ i \in IssueIds
-  /\ issues[i].status = "inProgress"
-  /\ issues' = [issues EXCEPT ![i].status = "inReview"]
-  /\ UNCHANGED projects
+SubmitReview(key, n) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ Issue(key, n).status = "inProgress"
+  /\ projects' = [projects EXCEPT ![key].issues[n].status = "inReview"]
 
-RequestChanges(i) ==
-  /\ i \in IssueIds
-  /\ issues[i].status = "inReview"
-  /\ issues' = [issues EXCEPT ![i].status = "inProgress"]
-  /\ UNCHANGED projects
+RequestChanges(key, n) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ Issue(key, n).status = "inReview"
+  /\ projects' = [projects EXCEPT ![key].issues[n].status = "inProgress"]
 
-Approve(i) ==
-  /\ i \in IssueIds
-  /\ issues[i].status = "inReview"
-  /\ \A b \in issues[i].blocked_by : Closed(issues[b].status)
-  /\ issues' = [issues EXCEPT ![i].status = "done", ![i].completed_at = "set"]
-  /\ UNCHANGED projects
+Approve(key, n) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ Issue(key, n).status = "inReview"
+  /\ \A b \in Issue(key, n).blocked_by : Closed(Issue(key, b).status)
+  /\ projects' = [projects EXCEPT
+       ![key].issues[n].status = "done",
+       ![key].issues[n].completed_at = "set"]
 
-Cancel(i) ==
-  /\ i \in IssueIds
-  /\ Open(issues[i].status)
-  /\ issues' = [issues EXCEPT ![i].status = "canceled", ![i].canceled_at = "set"]
-  /\ UNCHANGED projects
+Cancel(key, n) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ Open(Issue(key, n).status)
+  /\ projects' = [projects EXCEPT
+       ![key].issues[n].status = "canceled",
+       ![key].issues[n].canceled_at = "set"]
 
-Reopen(i) ==
-  /\ i \in IssueIds
-  /\ Closed(issues[i].status)
-  /\ issues' = [issues EXCEPT
-       ![i].status = "todo",
-       ![i].completed_at = "unset",
-       ![i].canceled_at = "unset"]
-  /\ UNCHANGED projects
+Reopen(key, n) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ Closed(Issue(key, n).status)
+  /\ projects' = [projects EXCEPT
+       ![key].issues[n].status = "todo",
+       ![key].issues[n].completed_at = "unset",
+       ![key].issues[n].canceled_at = "unset"]
 
-AddBlocker(i, b) ==
-  /\ i \in IssueIds
-  /\ b \in IssueIds
-  /\ i /= b
-  /\ issues[i].project = issues[b].project
-  /\ Open(issues[i].status)
-  /\ b \notin issues[i].blocked_by
-  /\ i \notin TransitiveBlockers(b)
-  /\ issues' = [issues EXCEPT ![i].blocked_by = @ \union {b}]
-  /\ UNCHANGED projects
+AddBlocker(key, n, b) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ b \in Numbers(key)
+  /\ n /= b
+  /\ Open(Issue(key, n).status)
+  /\ b \notin Issue(key, n).blocked_by
+  /\ n \notin TransitiveBlockers(key, b)
+  /\ projects' = [projects EXCEPT ![key].issues[n].blocked_by = @ \union {b}]
 
-RemoveBlocker(i, b) ==
-  /\ i \in IssueIds
-  /\ b \in issues[i].blocked_by
-  /\ issues' = [issues EXCEPT ![i].blocked_by = @ \ {b}]
-  /\ UNCHANGED projects
+RemoveBlocker(key, n, b) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ b \in Issue(key, n).blocked_by
+  /\ projects' = [projects EXCEPT ![key].issues[n].blocked_by = @ \ {b}]
 
-Comment(i) ==
-  /\ i \in IssueIds
-  /\ issues[i].status /= "canceled"
-  /\ issues' = [issues EXCEPT ![i].comments = @ + 1]
-  /\ UNCHANGED projects
+Comment(key, n) ==
+  /\ key \in DOMAIN projects
+  /\ n \in Numbers(key)
+  /\ Issue(key, n).status /= "canceled"
+  /\ projects' = [projects EXCEPT ![key].issues[n].comments = @ + 1]
 
 Next ==
   \/ \E key \in Keys : CreateProject(key)
-  \/ \E p \in ProjectIds, title \in Titles : CreateIssue(p, title)
-  \/ \E i \in IssueIds : Triage(i)
-  \/ \E i \in IssueIds, user \in Users : Assign(i, user)
-  \/ \E i \in IssueIds : Unassign(i)
-  \/ \E i \in IssueIds : Start(i)
-  \/ \E i \in IssueIds : SubmitReview(i)
-  \/ \E i \in IssueIds : RequestChanges(i)
-  \/ \E i \in IssueIds : Approve(i)
-  \/ \E i \in IssueIds : Cancel(i)
-  \/ \E i \in IssueIds : Reopen(i)
-  \/ \E i, b \in IssueIds : AddBlocker(i, b)
-  \/ \E i, b \in IssueIds : RemoveBlocker(i, b)
-  \/ \E i \in IssueIds : Comment(i)
+  \/ \E key \in DOMAIN projects :
+       \/ \E title \in Titles : CreateIssue(key, title)
+       \/ \E n \in Numbers(key) :
+            \/ Triage(key, n)
+            \/ \E user \in Users : Assign(key, n, user)
+            \/ Unassign(key, n)
+            \/ Start(key, n)
+            \/ SubmitReview(key, n)
+            \/ RequestChanges(key, n)
+            \/ Approve(key, n)
+            \/ Cancel(key, n)
+            \/ Reopen(key, n)
+            \/ \E b \in Numbers(key) : AddBlocker(key, n, b)
+            \/ \E b \in Numbers(key) : RemoveBlocker(key, n, b)
+            \/ Comment(key, n)
 
-Spec == Init /\ [][Next]_vars
+Spec == Init /\ [][Next]_projects
 
 =============================================================================
