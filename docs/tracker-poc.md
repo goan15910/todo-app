@@ -268,6 +268,30 @@ interfere.
   wrong name, a wrong parameter, a wrong post-state) must get stuck at the
   recorded line.
 
+## Results
+
+Everything below was measured on the final stack of pull requests.
+
+| Check | Result |
+| --- | --- |
+| TLC on `IssueTracker.cfg` | 2,063,238 distinct states, depth 29, no violation |
+| TLC on `IssueTrackerTwo.cfg` | 355,216 distinct states, depth 33, no violation |
+| Scenario traces | 4 walks × 3 stacks (fake, SQLite, HTTP over SQLite); the 3 recordings of each walk are step-for-step identical |
+| Hypothesis traces | 40 traces, 2,400 steps, 854 abstract states |
+| Coverage of all traces | 14/14 actions committed, 14/14 refused, 11/11 status edges, 839 abstract states |
+| TLC on traces | 52/52 accepted, about 40 s in parallel |
+| Negatives | 6/6 stuck at the recorded file and line, with the expected guard or state verdict |
+| Unit tests | 104, including the contract test over both adapters and every HTTP route |
+| Mutation | 815/815 killed over `todo_app`, `tracker/domain`, `tracker/service_layer` |
+
+Two things the recording found while being built, which is the point of
+building it: the first fake unit of work returned the stored objects to
+the caller, so a caller could change the store after the commit; and the
+first Hypothesis machine, drawing arbitrary refs, spent almost every step
+on refusals and never reached approval. The scenario traces over SQLite
+and over HTTP being identical to the fake ones is the adapter-independence
+claim made concrete.
+
 ## Delivery as stacked pull requests
 
 1. **Spec and design.** This document, `spec/IssueTracker.tla`, both

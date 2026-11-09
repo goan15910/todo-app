@@ -23,15 +23,32 @@ A task repository. Tasks move through draft, todo, in progress, snoozed, done, a
 
 `tests/test_tracker_adapters.py` runs one unit-of-work contract against both adapters. `tests/test_tracker_http.py` drives every route over SQLite. Dependencies are pinned in `requirements.txt`.
 
+### Proving the tracker against its spec
+
+`proof/tracker` records traces at the ports and checks them with TLC. Nothing in `tracker/` imports it.
+
+- `recording.py` holds the two proving adapters. `RecordingServices` has the service layer's names and labels each command with its spec action. `RecordingUnitOfWork` wraps any real unit of work and, when it ends, reads the repository back in a fresh unit of work and records whether the command committed or was refused.
+- `mapping.py` is the human-owned abstraction, pinned by `MAPPING.sha256`.
+- `trace.py` generates `IssueTrackerTrace.tla` for one trace. A committed step must be an enabled spec action with the recorded result; a refused step must be a disabled action with an unchanged state. `Keys`, `Users` and `MaxIssues` are set from the trace.
+- `scenarios.py` runs four readable walks through three stacks: the fake, SQLite through the service layer, and SQLite through the FastAPI app. `explore.py` is a Hypothesis machine that draws among the commands the spec enables in the current state, and sometimes any command at all.
+- `negatives.py` holds six wrong mappings that must get stuck at the recorded line: a dropped label, a wrong name, a wrong parameter, a refusal recorded as a commit, a commit recorded as a refusal, and a wrong post-state.
+
+```bash
+TLC_JAR=/tmp/tla2tools.jar python tools/validate_tracker_traces.py
+```
+
+That records 12 scenario traces and 40 Hypothesis traces, 2685 steps covering all 14 actions committed, all 14 refused, all 11 status edges, and 839 abstract states, checks every trace with TLC, and then checks the negatives. It takes about 40 seconds here. `tests/test_tracker_trace_validation.py` runs a subset and skips without `TLC_JAR`.
+
 `tests/test_tracker_services.py` drives every rule through the service layer. The mutation job covers `tracker/domain` and `tracker/service_layer`; adapters and entrypoints are excluded from mutation and covered by their own tests.
 
 ## Tests
 
 ```bash
+python -m pip install -r requirements.txt
 python -m unittest discover -s tests
 ```
 
-That run does not need Java. It does install Hypothesis (`hypothesis==6.142.1`) for the bounded state machine. `tests/test_lifecycle_scenarios.py` is a few lifecycle scenarios produced from the TLC state graph. Each docstring names a trace id from `tests/model/traces.json`. Regenerate both after a spec change:
+That run does not need Java. It needs the pinned dependencies for the tracker slice and Hypothesis for both bounded state machines. `tests/test_lifecycle_scenarios.py` is a few lifecycle scenarios produced from the TLC state graph. Each docstring names a trace id from `tests/model/traces.json`. Regenerate both after a spec change:
 
 ```bash
 curl -fsSL -o /tmp/tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
