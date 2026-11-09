@@ -283,6 +283,61 @@ class TaskServiceTests(unittest.TestCase):
         self.assertEqual(str(wake_error.exception), "wake_at must be a datetime")
         self.assertEqual(service.get_task(task_id).status, Status.TODO)
 
+    def test_fanout_actions_reject_the_other_status(self) -> None:
+        draft = Task.draft(1, "milk")
+        with self.assertRaises(TaskRejected) as delete_todo:
+            draft.delete_todo()
+        self.assertEqual(draft.status, Status.DRAFT)
+        self.assertEqual(str(delete_todo.exception), "delete rejected in draft")
+        with self.assertRaises(TaskRejected) as complete_todo:
+            draft.complete_todo()
+        self.assertEqual(str(complete_todo.exception), "complete rejected in draft")
+        with self.assertRaises(TaskRejected) as complete_in_progress:
+            draft.complete_in_progress()
+        self.assertEqual(
+            str(complete_in_progress.exception), "complete rejected in draft"
+        )
+        with self.assertRaises(TaskRejected) as snooze_todo:
+            draft.snooze_todo(WAKE)
+        self.assertEqual(str(snooze_todo.exception), "snooze rejected in draft")
+        with self.assertRaises(TaskRejected) as snooze_in_progress:
+            draft.snooze_in_progress(WAKE)
+        self.assertEqual(str(snooze_in_progress.exception), "snooze rejected in draft")
+        self.assertIsNone(draft.deleted_at)
+        self.assertIsNone(draft.wake_at)
+
+        todo = Task.draft(2, "milk")
+        todo.submit()
+        with self.assertRaises(TaskRejected) as delete_draft:
+            todo.delete_draft()
+        self.assertEqual(todo.status, Status.TODO)
+        self.assertEqual(str(delete_draft.exception), "delete rejected in todo")
+        with self.assertRaises(TaskRejected) as complete_in_progress:
+            todo.complete_in_progress()
+        self.assertEqual(str(complete_in_progress.exception), "complete rejected in todo")
+        with self.assertRaises(TaskRejected) as snooze_in_progress:
+            todo.snooze_in_progress(WAKE)
+        self.assertEqual(str(snooze_in_progress.exception), "snooze rejected in todo")
+        self.assertIsNone(todo.completed_at)
+        self.assertIsNone(todo.wake_at)
+
+        started = Task.draft(3, "milk")
+        started.submit()
+        started.start()
+        with self.assertRaises(TaskRejected) as complete_todo:
+            started.complete_todo()
+        self.assertEqual(
+            str(complete_todo.exception), "complete rejected in inProgress"
+        )
+        with self.assertRaises(TaskRejected) as snooze_todo:
+            started.snooze_todo(WAKE)
+        self.assertEqual(str(snooze_todo.exception), "snooze rejected in inProgress")
+        with self.assertRaises(TypeError) as wake:
+            started.snooze_in_progress("tomorrow")  # type: ignore[arg-type]
+        self.assertEqual(str(wake.exception), "wake_at must be a datetime")
+        self.assertEqual(started.status, Status.IN_PROGRESS)
+        self.assertIsNone(started.wake_at)
+
     def test_archive_requires_a_completion_time(self) -> None:
         task = Task.from_stored(1, "milk", Status.DONE, True, None, None, None, None)
         with self.assertRaises(TaskRejected) as caught:

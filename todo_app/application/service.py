@@ -5,31 +5,28 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 
+from proof.registry import bind
 from todo_app.application.errors import TaskNotFound
-from todo_app.application.ports import TaskRepository
+from todo_app.application.ports import IdAllocator, TaskRepository
+from todo_app.domain.errors import TaskRejected
 from todo_app.domain.task import Status, Task
 
 
 class TaskService:
     """Add, fetch, list, and move tasks. The repository stores them."""
 
-    def __init__(self, repository: TaskRepository) -> None:
+    def __init__(self, repository: TaskRepository, ids: IdAllocator) -> None:
         self._repository = repository
-        self._next_id = 1
+        self._ids = ids
 
     def add_task(self, title: str) -> Task:
-        task = Task.draft(self._next_id, title)
+        task = Task.draft(self._ids.peek(), title)
+        task_id = self._ids.allocate()
         self._repository.add(task)
-        self._next_id += 1
-        return self.get_task(task.id)
+        return self._load(task_id)
 
     def get_task(self, task_id: int) -> Task:
-        if isinstance(task_id, bool) or not isinstance(task_id, int):
-            raise TypeError("task_id must be an int")
-        stored = self._repository.get(task_id)
-        if stored is None:
-            raise TaskNotFound(task_id)
-        return stored
+        return self._load(task_id)
 
     def list_tasks(self, status: Status | None = None) -> tuple[Task, ...]:
         if status is not None and not isinstance(status, Status):
@@ -37,37 +34,72 @@ class TaskService:
         return self._repository.list(status)
 
     def submit(self, task_id: int) -> Task:
-        return self._persist(task_id, Task.submit)
+        return self._apply(task_id, Task.submit)
 
     def delete(self, task_id: int) -> Task:
-        return self._persist(task_id, Task.delete)
+        task = self._load(task_id)
+        if task.status is Status.DRAFT:
+            task.delete_draft()
+        elif task.status is Status.TODO:
+            task.delete_todo()
+        else:
+            raise TaskRejected(task.id, task.status.value, "delete")
+        return self._commit(task)
 
     def start(self, task_id: int) -> Task:
-        return self._persist(task_id, Task.start)
+        return self._apply(task_id, Task.start)
 
     def complete(self, task_id: int) -> Task:
-        return self._persist(task_id, Task.complete)
+        task = self._load(task_id)
+        if task.status is Status.TODO:
+            task.complete_todo()
+        elif task.status is Status.IN_PROGRESS:
+            task.complete_in_progress()
+        else:
+            raise TaskRejected(task.id, task.status.value, "complete")
+        return self._commit(task)
 
     def snooze(self, task_id: int, wake_at: datetime) -> Task:
-        return self._persist(task_id, lambda task: task.snooze(wake_at))
+        task = self._load(task_id)
+        if task.status is Status.TODO:
+            task.snooze_todo(wake_at)
+        elif task.status is Status.IN_PROGRESS:
+            task.snooze_in_progress(wake_at)
+        else:
+            raise TaskRejected(task.id, task.status.value, "snooze")
+        return self._commit(task)
 
     def resume(self, task_id: int) -> Task:
-        return self._persist(task_id, Task.resume)
+        return self._apply(task_id, Task.resume)
 
     def reopen(self, task_id: int) -> Task:
-        return self._persist(task_id, Task.reopen)
+        return self._apply(task_id, Task.reopen)
 
     def archive(self, task_id: int) -> Task:
-        return self._persist(task_id, Task.archive)
+        return self._apply(task_id, Task.archive)
 
     def unarchive(self, task_id: int) -> Task:
-        return self._persist(task_id, Task.unarchive)
+        return self._apply(task_id, Task.unarchive)
 
     def restore(self, task_id: int) -> Task:
-        return self._persist(task_id, Task.restore)
+        return self._apply(task_id, Task.restore)
 
-    def _persist(self, task_id: int, change: Callable[[Task], None]) -> Task:
-        task = self.get_task(task_id)
+    def _apply(self, task_id: int, change: Callable[[Task], None]) -> Task:
+        task = self._load(task_id)
         change(task)
+        return self._commit(task)
+
+    def _commit(self, task: Task) -> Task:
         self._repository.save(task)
-        return self.get_task(task_id)
+        return self._load(task.id)
+
+    def _load(self, task_id: int) -> Task:
+        if isinstance(task_id, bool) or not isinstance(task_id, int):
+            raise TypeError("task_id must be an int")
+        stored = self._repository.get(task_id)
+        if stored is None:
+            raise TaskNotFound(task_id)
+        return stored
+
+
+bind(TaskService)

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from todo_app.adapters.ids import SequentialIdAllocator
 from todo_app.adapters.memory import InMemoryTaskRepository
 from todo_app.application.service import TaskService
 
 
 def in_memory_app() -> TaskService:
-    return TaskService(InMemoryTaskRepository())
+    return TaskService(InMemoryTaskRepository(), SequentialIdAllocator())

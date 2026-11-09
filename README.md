@@ -6,8 +6,9 @@ A task repository. Tasks move through draft, todo, in progress, snoozed, done, a
 
 - `todo_app/domain` holds the task and the status rules.
 - `todo_app/application` holds the use cases and the repository port.
-- `todo_app/adapters` holds the in-memory repository.
+- `todo_app/adapters` holds the in-memory repository and the sequential id allocator.
 - `spec/TodoTask.tla` is the same lifecycle for a repository of at most `MaxTasks` tasks, plus get-by-id and list-by-status.
+- `proof/` holds the human-owned mapping, the generated trace check, and the Hypothesis machine.
 
 ## Tests
 
@@ -15,7 +16,7 @@ A task repository. Tasks move through draft, todo, in progress, snoozed, done, a
 python -m unittest discover -s tests
 ```
 
-That run does not need Java. `tests/test_lifecycle_scenarios.py` is a few lifecycle scenarios produced from the TLC state graph. Each docstring names a trace id from `tests/model/traces.json`. Regenerate both after a spec change:
+That run does not need Java. It does install Hypothesis (`hypothesis==6.142.1`) for the bounded state machine. `tests/test_lifecycle_scenarios.py` is a few lifecycle scenarios produced from the TLC state graph. Each docstring names a trace id from `tests/model/traces.json`. Regenerate both after a spec change:
 
 ```bash
 curl -fsSL -o /tmp/tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
@@ -23,6 +24,16 @@ TLC_JAR=/tmp/tla2tools.jar python tools/generate_model_tests.py
 ```
 
 `TLC_JAR=/tmp/tla2tools.jar python tools/generate_model_tests.py --check` fails if those files drift. It does not rewrite them. The TLC job also replays every state-graph edge in a temporary directory; that replay is not committed.
+
+## What the model checks, and what the code checks
+
+TLC on `spec/TodoTask.tla` with `MaxTasks = 2` is the whole design: 12872 states generated, 3423 distinct, depth 19. There is no liveness property and no environment variable. Titles and wake times are action parameters. Datetimes in the code collapse to `set` or `unset`.
+
+The five readable scenarios cover all 14 actions and all 13 status edges, and 15 abstract states. They drop empty titles, a second task that does more than sit as a draft, and the rest of those 3423 states. Further executions of the in-memory fake are the Hypothesis machine in `proof/explore.py` (30 examples, 18 steps, `derandomize`, bounded by `MaxTasks`). Its traces cover 86 abstract states. Together with the five scenarios the recorded traces cover 94, including empty titles. `TLC_JAR=/tmp/tla2tools.jar python tools/validate_traces.py` checks every one of those traces and prints the coverage. The other model states are not executed code. Trace validation plus that report is the conformance claim, not a proof over all executions.
+
+`proof/mapping.py` is the human-owned `abstract` and action map, pinned by `proof/MAPPING.sha256`. `submitted` is not in the view. The trace spec keeps it as history by taking the model's own actions. `seq` is derived from the stored ids. The id allocator is a port the mapping does not read.
+
+A stuck trace names the trace, the file, and the line, for example `trace wrong-name, proof/negatives.py line 41: TodoStart(1) taken while the guard was false`. The plain unit-test job does not run TLC. `tests/test_trace_validation.py` skips unless `TLC_JAR` is set.
 
 ## Specification
 
