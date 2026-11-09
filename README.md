@@ -10,6 +10,17 @@ A task repository. Tasks move through draft, todo, in progress, snoozed, done, a
 - `spec/TodoTask.tla` is the same lifecycle for a repository of at most `MaxTasks` tasks, plus get-by-id and list-by-status.
 - `proof/` holds the human-owned mapping, the generated trace check, and the Hypothesis machine.
 
+## The tracker slice
+
+`tracker/` is the second slice: an issue tracker whose ports are specified by `spec/IssueTracker.tla`. `docs/tracker-poc.md` is the design. The layout follows *Architecture Patterns with Python*, Part 1:
+
+- `tracker/domain` holds the `Project` aggregate, its `Issue` entities, and the rules.
+- `tracker/service_layer` holds one use case per spec action, the `AbstractUnitOfWork` and repository ports, and the service-layer errors.
+- `tracker/adapters` holds the in-memory repository and a unit of work that really rolls back.
+- `tracker/bootstrap.py` wires them.
+
+`tests/test_tracker_services.py` drives every rule through the service layer. The mutation job covers `tracker/domain` and `tracker/service_layer`; adapters and entrypoints are excluded from mutation and covered by their own tests.
+
 ## Tests
 
 ```bash
